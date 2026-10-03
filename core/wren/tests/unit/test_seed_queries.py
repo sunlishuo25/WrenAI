@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import json
+
+import duckdb
 import pytest
 
+from wren import WrenEngine
 from wren.memory.seed_queries import (
     SEED_TAG,
     _relationship_key_columns,
@@ -293,9 +298,7 @@ class TestGenerateSeedQueries:
                 _model("a", "aid", [_col("aid", "varchar")]),
                 _model("b", "bid", [_col("bid", "varchar")]),
             ],
-            "relationships": [
-                {"name": "a_b", "models": ["a", "b"], "condition": None}
-            ],
+            "relationships": [{"name": "a_b", "models": ["a", "b"], "condition": None}],
         }
         pairs = generate_seed_queries(manifest)
         assert not any("with" in p["nl"] for p in pairs)
@@ -814,3 +817,60 @@ def test_skips_non_dict_columns():
     sqls = [p["sql"] for p in pairs]
     assert "SELECT * FROM orders LIMIT 100" in sqls
     assert "SELECT SUM(amount) FROM orders" in sqls
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("numeric_name", "group_name"),
+    [
+        ("order amount", "sales region"),
+        ("order-total", "sales-region"),
+    ],
+    ids=["spaces", "hyphens"],
+)
+@pytest.mark.parametrize(
+    ("seed_index", "expected"),
+    [
+        (1, [(35.0,)]),
+        (2, [("East", 5.0), ("West", 30.0)]),
+        (3, [(1, 10.0, "West"), (2, 20.0, "West")]),
+    ],
+    ids=["aggregation", "grouped-aggregation", "accepted-values"],
+)
+def test_seed_queries_execute_with_quoted_column_names(
+    tmp_path, numeric_name, group_name, seed_index, expected
+):
+    """Execute seeds for valid MDL columns containing spaces or hyphens."""
+    numeric_sql = '"' + numeric_name.replace('"', '""') + '"'
+    group_sql = '"' + group_name.replace('"', '""') + '"'
+    with duckdb.connect(str(tmp_path / "seed.duckdb")) as con:
+        con.execute(
+            f"CREATE TABLE physical_orders (id INTEGER, {numeric_sql} DOUBLE, "
+            f"{group_sql} VARCHAR)"
+        )
+        con.execute(
+            "INSERT INTO physical_orders VALUES "
+            "(1, 10, 'West'), (2, 20, 'West'), (3, 5, 'East')"
+        )
+    model = _model(
+        "orders",
+        "id",
+        [
+            _col("id", "integer"),
+            _col(numeric_name, "double"),
+            _col(group_name, "varchar", properties={"acceptedValues": ["West"]}),
+        ],
+    )
+    model["tableReference"] = {
+        "catalog": "seed",
+        "schema": "main",
+        "table": "physical_orders",
+    }
+    manifest = {"catalog": "wren", "schema": "public", "models": [model]}
+    mdl = base64.b64encode(json.dumps(manifest).encode()).decode()
+    with WrenEngine(
+        mdl, "duckdb", {"url": str(tmp_path), "format": "duckdb"}, fallback=False
+    ) as engine:
+        sql = generate_seed_queries(manifest)[seed_index]["sql"]
+        rows = engine.query(sql).to_pylist()
+    assert sorted(tuple(row.values()) for row in rows) == expected

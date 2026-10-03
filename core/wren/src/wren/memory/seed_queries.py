@@ -104,19 +104,21 @@ def _model_seeds(
 
     # Template 2a: simple aggregation
     if numeric_col:
+        numeric_sql = exp.to_identifier(numeric_col).sql()
         pairs.append(
             {
                 "nl": f"Total {numeric_col} in {name}",
-                "sql": f"SELECT SUM({numeric_col}) FROM {name}",
+                "sql": f"SELECT SUM({numeric_sql}) FROM {name}",
             }
         )
 
     # Template 2b: grouped aggregation
     if numeric_col and group_col:
+        group_sql = exp.to_identifier(group_col).sql()
         pairs.append(
             {
                 "nl": f"{numeric_col} by {group_col} in {name}",
-                "sql": f"SELECT {group_col}, SUM({numeric_col}) FROM {name} GROUP BY 1",
+                "sql": f"SELECT {group_sql}, SUM({numeric_sql}) FROM {name} GROUP BY 1",
             }
         )
 
@@ -127,10 +129,11 @@ def _model_seeds(
         if not first_value:
             continue
         quoted = first_value.replace("'", "''")
+        col_sql = exp.to_identifier(col_name).sql()
         pairs.append(
             {
                 "nl": f"Show {name} where {col_name} is {first_value}",
-                "sql": f"SELECT * FROM {name} WHERE {col_name} = '{quoted}' LIMIT 100",
+                "sql": f"SELECT * FROM {name} WHERE {col_sql} = '{quoted}' LIMIT 100",
             }
         )
 
